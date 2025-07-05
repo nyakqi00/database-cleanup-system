@@ -156,3 +156,75 @@ async def validate_emails(
         "valid_emails": valid_emails[:50],
         "invalid_emails": invalid_emails[:50],
     }
+
+@app.post("/transform-cleaned-data")
+def transform_cleaned_data(
+    filename: str = Form(...),
+    brand: str = Form(...)
+):
+    brand = brand.strip()
+    brand_short = {
+        "Tony Romas": "TR",
+        "The Manhattan Fish Market": "MFM",
+        "New York Steak Shack": "NYSS"
+    }
+
+    if brand not in brand_short:
+        return JSONResponse(status_code=400, content={"error": "Unknown brand."})
+
+    brand_code = brand_short[brand]
+    file_path = os.path.join(UPLOAD_FOLDER, filename)
+
+    if not os.path.exists(file_path):
+        return JSONResponse(status_code=404, content={"error": "File not found."})
+
+    try:
+        df = pd.read_csv(file_path, encoding="cp1252")
+
+        # Detect and validate segment column
+        segment_col = None
+        for col in df.columns:
+            if "segment" in col.lower():
+                segment_col = col
+                break
+
+        if not segment_col:
+            return JSONResponse(status_code=400, content={"error": "Segment column not found in CSV."})
+
+        df[segment_col] = df[segment_col].astype(str).str.strip()
+        df[segment_col] = brand_code + "_" + df[segment_col]
+
+        # ✅ Detect and validate brand column
+        brand_col = None
+        for col in df.columns:
+            if "brand" in col.lower():
+                brand_col = col
+                break
+
+        if not brand_col:
+            return JSONResponse(status_code=400, content={"error": "Brand column not found in CSV."})
+
+
+        # ✅ Replace all values in brand column with selected brand
+        df[brand_col] = brand
+
+        # Save transformed file
+        transformed_filename = f"transformed_{filename}"
+        transformed_path = os.path.join(UPLOAD_FOLDER, transformed_filename)
+        df.to_csv(transformed_path, index=False)
+
+        preview = df.head(10).to_dict(orient="records")
+        return {
+            "status": "success",
+            "brand": brand,
+            "segment_column": segment_col,
+            "brand_column": brand_col,
+            "transformed_file": transformed_filename,
+            "preview": preview
+        }
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"Failed to transform data: {str(e)}"})
+
+
+
