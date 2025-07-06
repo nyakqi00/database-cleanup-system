@@ -7,12 +7,11 @@ import pandas as pd
 import os
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import select, update, func, text
 
 from app import models
-from app.database import engine, SessionLocal
-from app.models import InvalidEmail
-from app.database import init_db
+from app.database import engine, SessionLocal, init_db
+from app.models import InvalidEmail, MasterEmail, EmailTR, EmailMFM, EmailNYSS
 
 # Initialize DB
 models.Base.metadata.create_all(bind=engine)
@@ -51,7 +50,12 @@ def normalize_emails(series):
 def read_root():
     return {"message": "Email Cleanup API is live!"}
 
-# CSV upload route
+# Pydantic model for invalid email submission
+class EmailUploadRequest(BaseModel):
+    emails: List[str]
+    brand: str
+
+# Upload and preview route
 @app.post("/upload")
 async def upload_csv(
     file: UploadFile = File(...),
@@ -71,7 +75,7 @@ async def upload_csv(
 
         df['Email'] = normalize_emails(df['Email'])
 
-        # Get all invalid emails from DB (no brand filter)
+        # Get invalid emails from DB
         invalid_emails = db.query(InvalidEmail.email).all()
         invalid_emails_set = {email for (email,) in invalid_emails if email}
 
@@ -88,12 +92,7 @@ async def upload_csv(
         "preview": sample
     }
 
-# Pydantic model for JSON upload
-class EmailUploadRequest(BaseModel):
-    emails: List[str]
-    brand: str
-
-# Route to save invalid emails (accepts JSON)
+# Add invalid emails
 @app.post("/invalid-emails/add")
 def add_invalid_emails(
     data: EmailUploadRequest,
@@ -108,7 +107,7 @@ def add_invalid_emails(
     db.commit()
     return {"status": "success", "brand": data.brand.strip(), "added": added}
 
-# Route to validate emails in uploaded CSV
+# Validate emails in uploaded CSV
 @app.post("/validate-emails")
 async def validate_emails(
     file: UploadFile = File(...),
@@ -125,19 +124,11 @@ async def validate_emails(
     except Exception as e:
         return JSONResponse(status_code=400, content={"error": f"Invalid CSV: {str(e)}"})
 
-    # Detect email column
-    email_col = None
-    for col in df.columns:
-        if "email" in col.lower():
-            email_col = col
-            break
-
+    email_col = next((col for col in df.columns if "email" in col.lower()), None)
     if not email_col:
         return JSONResponse(status_code=400, content={"error": "Email column not found in CSV."})
 
     df[email_col] = normalize_emails(df[email_col])
-
-    # Get all invalid emails (no brand filter)
     invalid_set = {
         record.email.strip().lower()
         for record in db.query(InvalidEmail).all()
@@ -145,7 +136,6 @@ async def validate_emails(
     }
 
     df["status"] = df[email_col].apply(lambda e: "invalid" if e in invalid_set else "valid")
-
     valid_emails = df[df["status"] == "valid"][email_col].tolist()
     invalid_emails = df[df["status"] == "invalid"][email_col].tolist()
 
@@ -157,10 +147,12 @@ async def validate_emails(
         "invalid_emails": invalid_emails[:50],
     }
 
+# Transform data + UPSERT into master
 @app.post("/transform-cleaned-data")
 def transform_cleaned_data(
     filename: str = Form(...),
-    brand: str = Form(...)
+    brand: str = Form(...),
+    db: Session = Depends(get_db)
 ):
     brand = brand.strip()
     brand_short = {
@@ -180,39 +172,53 @@ def transform_cleaned_data(
 
     try:
         df = pd.read_csv(file_path, encoding="cp1252")
-
-        # Detect and validate segment column
-        segment_col = None
-        for col in df.columns:
-            if "segment" in col.lower():
-                segment_col = col
-                break
-
+        segment_col = next((col for col in df.columns if "segment" in col.lower()), None)
         if not segment_col:
-            return JSONResponse(status_code=400, content={"error": "Segment column not found in CSV."})
-
-        df[segment_col] = df[segment_col].astype(str).str.strip()
-        df[segment_col] = brand_code + "_" + df[segment_col]
-
-        # ✅ Detect and validate brand column
-        brand_col = None
-        for col in df.columns:
-            if "brand" in col.lower():
-                brand_col = col
-                break
-
+            return JSONResponse(status_code=400, content={"error": "Segment column not found."})
+        brand_col = next((col for col in df.columns if "brand" in col.lower()), None)
         if not brand_col:
-            return JSONResponse(status_code=400, content={"error": "Brand column not found in CSV."})
+            return JSONResponse(status_code=400, content={"error": "Brand column not found."})
 
-
-        # ✅ Replace all values in brand column with selected brand
+        df[segment_col] = brand_code + "_" + df[segment_col].astype(str).str.strip()
         df[brand_col] = brand
 
-        # Save transformed file
         transformed_filename = f"transformed_{filename}"
         transformed_path = os.path.join(UPLOAD_FOLDER, transformed_filename)
         df.to_csv(transformed_path, index=False)
 
+        segment_field = f"segment_{brand_code.lower()}"
+        is_flag = f"is_{brand_code.lower()}"
+
+        for _, row in df.iterrows():
+            email = row.get("email")
+            if pd.isna(email):
+                continue
+            stmt = text(f"""
+                INSERT INTO master_emails (
+                    email, card_no, name, phone,
+                    {segment_field}, {is_flag}, last_updated
+                )
+                VALUES (
+                    :email, :card_no, :name, :phone,
+                    :segment, TRUE, NOW()
+                )
+                ON CONFLICT (email) DO UPDATE SET
+                    {segment_field} = EXCLUDED.{segment_field},
+                    {is_flag} = TRUE,
+                    last_updated = NOW(),
+                    card_no = COALESCE(master_emails.card_no, EXCLUDED.card_no),
+                    name = COALESCE(master_emails.name, EXCLUDED.name),
+                    phone = COALESCE(master_emails.phone, EXCLUDED.phone);
+            """)
+            db.execute(stmt, {
+                "email": row.get("email"),
+                "card_no": row.get("card_no"),
+                "name": row.get("name"),
+                "phone": row.get("phone"),
+                "segment": row.get(segment_col)
+            })
+
+        db.commit()
         preview = df.head(10).to_dict(orient="records")
         return {
             "status": "success",
@@ -224,7 +230,122 @@ def transform_cleaned_data(
         }
 
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": f"Failed to transform data: {str(e)}"})
+        return JSONResponse(status_code=500, content={"error": f"Failed to transform: {str(e)}"})
 
+# Save into brand-specific table
+@app.post("/save-to-brand")
+def save_to_brand(
+    filename: str = Form(...),
+    brand: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    brand_map = {
+        "Tony Romas": "emails_tr",
+        "The Manhattan Fish Market": "emails_mfm",
+        "New York Steak Shack": "emails_nyss"
+    }
 
+    if brand not in brand_map:
+        return JSONResponse(status_code=400, content={"error": "Unknown brand."})
 
+    table_name = brand_map[brand]
+    file_path = os.path.join(UPLOAD_FOLDER, filename)
+
+    if not os.path.exists(file_path):
+        return JSONResponse(status_code=404, content={"error": "File not found."})
+
+    try:
+        df = pd.read_csv(file_path, encoding='cp1252')
+        required_cols = ["card_no", "brand", "name", "phone", "email", "segment"]
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            return JSONResponse(status_code=400, content={"error": f"Missing columns: {missing_cols}"})
+
+        insert_count = 0
+        for _, row in df.iterrows():
+            db.execute(
+                f"""
+                INSERT INTO {table_name} (card_no, brand, name, phone, email, segment)
+                VALUES (:card_no, :brand, :name, :phone, :email, :segment)
+                """,
+                {
+                    "card_no": row["card_no"],
+                    "brand": row["brand"],
+                    "name": row["name"],
+                    "phone": row["phone"],
+                    "email": row["email"],
+                    "segment": row["segment"]
+                }
+            )
+            insert_count += 1
+
+        db.commit()
+        return {
+            "status": "success",
+            "brand_table": table_name,
+            "inserted": insert_count
+        }
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"Failed to save: {str(e)}"})
+
+# Merge all brand tables into master
+@app.post("/merge-into-master")
+def merge_into_master(db: Session = Depends(get_db)):
+    try:
+        now = datetime.utcnow()
+        inserted, updated = 0, 0
+
+        tr_data = db.execute(select(EmailTR)).scalars().all()
+        mfm_data = db.execute(select(EmailMFM)).scalars().all()
+        nyss_data = db.execute(select(EmailNYSS)).scalars().all()
+
+        email_map = {}
+
+        for record in tr_data + mfm_data + nyss_data:
+            email = record.email.strip().lower()
+            if email not in email_map:
+                email_map[email] = {
+                    "email": email,
+                    "card_no": record.card_no,
+                    "name": record.name,
+                    "phone": record.phone,
+                    "segment_tr": None,
+                    "segment_mfm": None,
+                    "segment_nyss": None,
+                    "is_tr": False,
+                    "is_mfm": False,
+                    "is_nyss": False,
+                    "last_updated": now
+                }
+
+            if isinstance(record, EmailTR):
+                email_map[email]["segment_tr"] = record.segment
+                email_map[email]["is_tr"] = True
+            elif isinstance(record, EmailMFM):
+                email_map[email]["segment_mfm"] = record.segment
+                email_map[email]["is_mfm"] = True
+            elif isinstance(record, EmailNYSS):
+                email_map[email]["segment_nyss"] = record.segment
+                email_map[email]["is_nyss"] = True
+
+        for email, data in email_map.items():
+            existing = db.query(MasterEmail).filter_by(email=email).first()
+            if existing:
+                for field, value in data.items():
+                    setattr(existing, field, value)
+                updated += 1
+            else:
+                db.add(MasterEmail(**data))
+                inserted += 1
+
+        db.commit()
+        return {
+            "status": "success",
+            "inserted": inserted,
+            "updated": updated,
+            "total": inserted + updated
+        }
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
