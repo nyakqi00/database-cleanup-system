@@ -80,17 +80,55 @@ async def upload_csv(
         invalid_emails_set = {email for (email,) in invalid_emails if email}
 
         df['is_invalid'] = df['Email'].apply(lambda e: e in invalid_emails_set)
-        sample = df.head(10).to_dict(orient="records")
+
+        # Filter out invalids and save cleaned CSV
+        cleaned_df = df[df['is_invalid'] == False].copy()
+        cleaned_path = os.path.join(UPLOAD_FOLDER, f"cleaned_{file.filename}")
+        cleaned_df.to_csv(cleaned_path, index=False)
+
+        sample = cleaned_df.head(10).to_dict(orient="records")
+
+        # === AUTO-RUN CLEANING PIPELINE === #
+
+        # 1. Transform cleaned data
+        from fastapi import Form as _Form  # Prevent FastAPI Form conflict
+        transform_result = transform_cleaned_data(
+            filename=f"cleaned_{file.filename}",
+            brand=brand,
+            db=db
+        )
+        if isinstance(transform_result, JSONResponse):
+            return transform_result
+
+        # 2. Save to brand table
+        save_result = save_to_brand(
+            filename=transform_result["transformed_file"],
+            brand=brand,
+            db=db
+        )
+        if isinstance(save_result, JSONResponse):
+            return save_result
+
+        # 3. Merge into master_emails
+        merge_result = merge_into_master(db=db)
+        if isinstance(merge_result, JSONResponse):
+            return merge_result
+
+        # Final response
+        return {
+            "status": "success",
+            "brand": brand,
+            "rows_uploaded": len(df),
+            "rows_after_invalid_removal": len(cleaned_df),
+            "transformed_file": transform_result["transformed_file"],
+            "preview": sample,
+            "inserted_to_brand": save_result.get("inserted", 0),
+            "merge_result": merge_result
+        }
 
     except Exception as e:
-        return JSONResponse(status_code=400, content={"error": f"Invalid CSV: {str(e)}"})
+        return JSONResponse(status_code=400, content={"error": f"Upload failed: {str(e)}"})
 
-    return {
-        "filename": file.filename,
-        "rows": len(df),
-        "brand": brand.strip(),
-        "preview": sample
-    }
 
 # Add invalid emails
 @app.post("/invalid-emails/add")
@@ -256,18 +294,24 @@ def save_to_brand(
 
     try:
         df = pd.read_csv(file_path, encoding='cp1252')
+
+        # 🔧 Normalize column names
+        df.columns = [col.strip().lower() for col in df.columns]
+
+        # ✅ Required columns check
         required_cols = ["card_no", "brand", "name", "phone", "email", "segment"]
         missing_cols = [col for col in required_cols if col not in df.columns]
+
         if missing_cols:
             return JSONResponse(status_code=400, content={"error": f"Missing columns: {missing_cols}"})
 
         insert_count = 0
         for _, row in df.iterrows():
             db.execute(
-                f"""
-                INSERT INTO {table_name} (card_no, brand, name, phone, email, segment)
-                VALUES (:card_no, :brand, :name, :phone, :email, :segment)
-                """,
+                text(f"""
+                    INSERT INTO {table_name} (card_no, brand, name, phone, email, segment)
+                    VALUES (:card_no, :brand, :name, :phone, :email, :segment)
+                """),
                 {
                     "card_no": row["card_no"],
                     "brand": row["brand"],
