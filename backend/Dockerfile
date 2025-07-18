@@ -5,7 +5,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app/ app/
+COPY backend_app/ ./backend_app 
+COPY temp_uploads/ ./temp_uploads
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+EXPOSE 8000
 
+CMD ["uvicorn", "backend_app.main:app", "--host", "0.0.0.0", "--port", "8000"]
