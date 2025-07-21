@@ -7,7 +7,7 @@ import pandas as pd
 import os
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import select, update, func, text
+from sqlalchemy import select, text
 
 from backend_app import models
 from backend_app.database import engine, SessionLocal, init_db
@@ -17,14 +17,11 @@ from backend_app.models import InvalidEmail, MasterEmail, EmailTR, EmailMFM, Ema
 models.Base.metadata.create_all(bind=engine)
 init_db()
 
-# Temp uploads folder
 UPLOAD_FOLDER = "temp_uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Create FastAPI app
 app = FastAPI()
 
-# CORS config (allow React/frontend access)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*", "http://localhost:5173"],
@@ -33,8 +30,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# Dependency: Get DB session
 def get_db():
     db = SessionLocal()
     try:
@@ -42,27 +37,36 @@ def get_db():
     finally:
         db.close()
 
-# Utility: Normalize email column
 def normalize_emails(series):
     return series.astype(str).str.strip().str.lower()
 
-# Health check route
-@app.get("/")
-def read_root():
-    return {"message": "Email Cleanup API is live!"}
+def normalize_and_map_columns(df):
+    df.columns = [col.strip().lower().replace(" ", "_") for col in df.columns]
+    column_aliases = {
+        "card_no": ["card_no", "card_number", "cardnum", "cardno", "card_no_"],
+        "brand": ["brand", "restaurant", "outlet"],
+        "name": ["name", "full_name", "customer_name"],
+        "phone": ["phone", "mobile", "mobile_number", "contact"],
+        "email": ["email", "email_address", "e-mail"],
+        "segment": ["segment", "segment_group", "group"]
+    }
+    for standard, aliases in column_aliases.items():
+        for alias in aliases:
+            if alias in df.columns and alias != standard:
+                df.rename(columns={alias: standard}, inplace=True)
+                break
+    return df
 
-# Pydantic model for invalid email submission
 class EmailUploadRequest(BaseModel):
     emails: List[str]
     brand: str
 
-# Upload and preview route
+@app.get("/")
+def read_root():
+    return {"message": "Email Cleanup API is live!"}
+
 @app.post("/upload")
-async def upload_csv(
-    file: UploadFile = File(...),
-    brand: str = Form(...),
-    db: Session = Depends(get_db)
-):
+async def upload_csv(file: UploadFile = File(...), brand: str = Form(...), db: Session = Depends(get_db)):
     file_path = os.path.join(UPLOAD_FOLDER, f"{datetime.now().timestamp()}_{file.filename}")
     contents = await file.read()
     with open(file_path, "wb") as f:
@@ -70,52 +74,33 @@ async def upload_csv(
 
     try:
         df = pd.read_csv(file_path, encoding='utf-8-sig')
+        df = normalize_and_map_columns(df)
 
-        if 'Email' not in df.columns:
-            return JSONResponse(status_code=400, content={"error": "CSV missing 'Email' column."})
+        if 'email' not in df.columns:
+            return JSONResponse(status_code=400, content={"error": "CSV missing 'email' column.", "detected_columns": df.columns.tolist()})
 
-        df['Email'] = normalize_emails(df['Email'])
+        df['email'] = normalize_emails(df['email'])
 
-        # Get invalid emails from DB
-        invalid_emails = db.query(InvalidEmail.email).all()
-        invalid_emails_set = {email for (email,) in invalid_emails if email}
+        invalid_emails_set = {email for (email,) in db.query(InvalidEmail.email).all() if email}
+        df['is_invalid'] = df['email'].apply(lambda e: e in invalid_emails_set)
 
-        df['is_invalid'] = df['Email'].apply(lambda e: e in invalid_emails_set)
-
-        # Filter out invalids and save cleaned CSV
         cleaned_df = df[df['is_invalid'] == False].copy()
         cleaned_path = os.path.join(UPLOAD_FOLDER, f"cleaned_{file.filename}")
         cleaned_df.to_csv(cleaned_path, index=False)
-
         sample = cleaned_df.head(10).to_dict(orient="records")
 
-        # === AUTO-RUN CLEANING PIPELINE === #
-
-        # 1. Transform cleaned data
-        from fastapi import Form as _Form  # Prevent FastAPI Form conflict
-        transform_result = transform_cleaned_data(
-            filename=f"cleaned_{file.filename}",
-            brand=brand,
-            db=db
-        )
+        transform_result = transform_cleaned_data(filename=f"cleaned_{file.filename}", brand=brand, db=db)
         if isinstance(transform_result, JSONResponse):
             return transform_result
 
-        # 2. Save to brand table
-        save_result = save_to_brand(
-            filename=transform_result["transformed_file"],
-            brand=brand,
-            db=db
-        )
+        save_result = save_to_brand(filename=transform_result["transformed_file"], brand=brand, db=db)
         if isinstance(save_result, JSONResponse):
             return save_result
 
-        # 3. Merge into master_emails
         merge_result = merge_into_master(db=db)
         if isinstance(merge_result, JSONResponse):
             return merge_result
 
-        # Final response
         return {
             "status": "success",
             "brand": brand,
@@ -131,7 +116,6 @@ async def upload_csv(
         return JSONResponse(status_code=400, content={"error": f"Upload failed: {str(e)}"})
 
 
-# Add invalid emails
 @app.post("/invalid-emails/add")
 def add_invalid_emails(
     data: EmailUploadRequest,
@@ -146,7 +130,7 @@ def add_invalid_emails(
     db.commit()
     return {"status": "success", "brand": data.brand.strip(), "added": added}
 
-# Validate emails in uploaded CSV
+
 @app.post("/validate-emails")
 async def validate_emails(
     file: UploadFile = File(...),
@@ -160,23 +144,23 @@ async def validate_emails(
 
     try:
         df = pd.read_csv(file_path, encoding='utf-8-sig')
+        df = normalize_and_map_columns(df)
     except Exception as e:
         return JSONResponse(status_code=400, content={"error": f"Invalid CSV: {str(e)}"})
 
-    email_col = next((col for col in df.columns if "email" in col.lower()), None)
-    if not email_col:
-        return JSONResponse(status_code=400, content={"error": "Email column not found in CSV."})
+    if 'email' not in df.columns:
+        return JSONResponse(status_code=400, content={"error": "Email column not found in CSV.", "detected_columns": df.columns.tolist()})
 
-    df[email_col] = normalize_emails(df[email_col])
+    df["email"] = normalize_emails(df["email"])
     invalid_set = {
         record.email.strip().lower()
         for record in db.query(InvalidEmail).all()
         if record.email
     }
 
-    df["status"] = df[email_col].apply(lambda e: "invalid" if e in invalid_set else "valid")
-    valid_emails = df[df["status"] == "valid"][email_col].tolist()
-    invalid_emails = df[df["status"] == "invalid"][email_col].tolist()
+    df["status"] = df["email"].apply(lambda e: "invalid" if e in invalid_set else "valid")
+    valid_emails = df[df["status"] == "valid"]["email"].tolist()
+    invalid_emails = df[df["status"] == "invalid"]["email"].tolist()
 
     return {
         "total": len(df),
@@ -186,7 +170,8 @@ async def validate_emails(
         "invalid_emails": invalid_emails[:50],
     }
 
-# Transform data + UPSERT into master
+
+
 @app.post("/transform-cleaned-data")
 def transform_cleaned_data(
     filename: str = Form(...),
@@ -211,15 +196,16 @@ def transform_cleaned_data(
 
     try:
         df = pd.read_csv(file_path, encoding='utf-8-sig')
-        segment_col = next((col for col in df.columns if "segment" in col.lower()), None)
-        if not segment_col:
-            return JSONResponse(status_code=400, content={"error": "Segment column not found."})
-        brand_col = next((col for col in df.columns if "brand" in col.lower()), None)
-        if not brand_col:
-            return JSONResponse(status_code=400, content={"error": "Brand column not found."})
+        df = normalize_and_map_columns(df)
 
-        df[segment_col] = brand_code + "_" + df[segment_col].astype(str).str.strip()
-        df[brand_col] = brand
+        if "segment" not in df.columns or "brand" not in df.columns:
+            return JSONResponse(status_code=400, content={
+                "error": "Missing required columns: segment or brand.",
+                "detected_columns": df.columns.tolist()
+            })
+
+        df["segment"] = brand_code + "_" + df["segment"].astype(str).str.strip()
+        df["brand"] = brand
 
         transformed_filename = f"transformed_{filename}"
         transformed_path = os.path.join(UPLOAD_FOLDER, transformed_filename)
@@ -250,11 +236,11 @@ def transform_cleaned_data(
                     phone = COALESCE(master_emails.phone, EXCLUDED.phone);
             """)
             db.execute(stmt, {
-                "email": row.get("email"),
+                "email": str(row.get("email")).strip().lower(),
                 "card_no": row.get("card_no"),
                 "name": row.get("name"),
                 "phone": row.get("phone"),
-                "segment": row.get(segment_col)
+                "segment": row.get("segment")
             })
 
         db.commit()
@@ -262,8 +248,6 @@ def transform_cleaned_data(
         return {
             "status": "success",
             "brand": brand,
-            "segment_column": segment_col,
-            "brand_column": brand_col,
             "transformed_file": transformed_filename,
             "preview": preview
         }
@@ -271,7 +255,8 @@ def transform_cleaned_data(
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": f"Failed to transform: {str(e)}"})
 
-# Save into brand-specific table
+
+
 @app.post("/save-to-brand")
 def save_to_brand(
     filename: str = Form(...),
@@ -295,16 +280,12 @@ def save_to_brand(
 
     try:
         df = pd.read_csv(file_path, encoding='utf-8-sig')
+        df = normalize_and_map_columns(df)
 
-        # 🔧 Normalize column names
-        df.columns = [col.strip().lower() for col in df.columns]
-
-        # ✅ Required columns check
         required_cols = ["card_no", "brand", "name", "phone", "email", "segment"]
         missing_cols = [col for col in required_cols if col not in df.columns]
-
         if missing_cols:
-            return JSONResponse(status_code=400, content={"error": f"Missing columns: {missing_cols}"})
+            return JSONResponse(status_code=400, content={"error": f"Missing columns: {missing_cols}", "detected_columns": df.columns.tolist()})
 
         insert_count = 0
         for _, row in df.iterrows():
@@ -318,7 +299,6 @@ def save_to_brand(
                     phone = EXCLUDED.phone,
                     segment = EXCLUDED.segment;
             """)
-            
             db.execute(stmt, {
                 "card_no": row["card_no"],
                 "brand": row["brand"],
@@ -329,8 +309,8 @@ def save_to_brand(
             })
 
         insert_count += 1
-
         db.commit()
+
         return {
             "status": "success",
             "brand_table": table_name,
@@ -340,7 +320,7 @@ def save_to_brand(
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": f"Failed to save: {str(e)}"})
 
-# Merge all brand tables into master
+
 @app.post("/merge-into-master")
 def merge_into_master(db: Session = Depends(get_db)):
     try:
