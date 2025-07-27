@@ -100,18 +100,24 @@ async def upload_csv(file: UploadFile = File(...), brand: str = Form(...), db: S
         merge_result = merge_into_master(db=db)
         if isinstance(merge_result, JSONResponse):
             return merge_result
+        
+        # Extract invalids
+        invalid_df = df[df['is_invalid'] == True].copy()
+        invalid_emails = invalid_df['email'].tolist()
+        invalid_count = len(invalid_emails)
 
         return {
             "status": "success",
             "brand": brand,
             "rows_uploaded": len(df),
             "rows_after_invalid_removal": len(cleaned_df),
+            "invalid_count": invalid_count,
+            "invalid_emails": invalid_emails[:50],  # Optional: show top 50 only
             "transformed_file": transform_result["transformed_file"],
             "preview": sample,
             "inserted_to_brand": save_result.get("inserted", 0),
             "merge_result": merge_result
         }
-
     except Exception as e:
         return JSONResponse(status_code=400, content={"error": f"Upload failed: {str(e)}"})
 
