@@ -1,0 +1,5 @@
+# Force GitHub to prioritize Python
+*.py linguist-detectable=true
+
+# Deprioritize frontend folders
+rv-cleanup-ui/* linguist-vendored
