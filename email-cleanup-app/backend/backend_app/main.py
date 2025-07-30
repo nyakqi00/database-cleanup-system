@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, Depends
+from fastapi import FastAPI, UploadFile, File, Form, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -96,6 +96,9 @@ async def upload_csv(file: UploadFile = File(...), brand: str = Form(...), db: S
         save_result = save_to_brand(filename=transform_result["transformed_file"], brand=brand, db=db)
         if isinstance(save_result, JSONResponse):
             return save_result
+        
+        db.flush()
+        db.expire_all()
 
         merge_result = merge_into_master(db=db)
         if isinstance(merge_result, JSONResponse):
@@ -331,12 +334,14 @@ def save_to_brand(
 def merge_into_master(db: Session = Depends(get_db)):
     try:
         now = datetime.utcnow()
-        inserted, updated = 0, 0
+        inserted, updated, removed = 0, 0, 0
 
         tr_data = db.execute(select(EmailTR)).scalars().all()
         mfm_data = db.execute(select(EmailMFM)).scalars().all()
         nyss_data = db.execute(select(EmailNYSS)).scalars().all()
 
+
+        # Rebuild master_emails from brand tables
         email_map = {}
 
         for record in tr_data + mfm_data + nyss_data:
@@ -386,3 +391,33 @@ def merge_into_master(db: Session = Depends(get_db)):
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/master-emails")
+def get_master_emails(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db)
+):
+    try:
+        results = db.query(MasterEmail).order_by(MasterEmail.last_updated.desc()).offset(offset).limit(limit).all()
+        total = db.query(MasterEmail).count()
+        emails = [
+            {
+                "email": row.email,
+                "card_no": row.card_no,
+                "name": row.name,
+                "phone": row.phone,
+                "segment_tr": row.segment_tr,
+                "segment_mfm": row.segment_mfm,
+                "segment_nyss": row.segment_nyss,
+                "is_tr": row.is_tr,
+                "is_mfm": row.is_mfm,
+                "is_nyss": row.is_nyss,
+                "last_updated": row.last_updated
+            }
+            for row in results
+        ]
+        return {"status": "success", "total": total, "data": emails}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
