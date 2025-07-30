@@ -208,3 +208,25 @@ __marimo__/
 
 # Ignore temporary CSV uploads
 backend/temp_uploads/
+
+# Ignore SQL backup files
+backup.sql
+
+# Docker volumes and intermediate build files
+**/data/
+**/pgdata/
+**/volumes/
+*.pid
+*.sock
+
+
+# React / Vite build
+frontend/dist/
+frontend/.vite/
+
+*.log
+logs/
+
+# SQL backup dumps
+email-cleanup-app/backup.sql
+email-cleanup-app/dump-*.sql
