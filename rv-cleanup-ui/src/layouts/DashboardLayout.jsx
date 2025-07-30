@@ -10,7 +10,7 @@ function DashboardLayout({ children }) {
             {/* Sidebar */}
             <aside className="w-64 bg-white border-r shadow-lg flex flex-col">
                 <div className="h-16 px-6 flex items-center border-b font-bold text-xl text-teal-600">
-                    <img src="/logo.jpeg" alt="RV Cleanup Logo" className="h-20" />
+                    <img src="/logo.jpeg" alt="RV Cleanup Logo" className="w-14 mx-auto" />
                 </div>
                 <nav className="flex-1 px-6 py-4 space-y-2 text-gray-700">
                     <NavLink

@@ -19,12 +19,7 @@ const LoadingModal = ({ timeLeft, progress }) => {
                 />
             </div>
 
-            <button
-                disabled
-                className="mt-2 w-full text-xs text-blue-600 border border-blue-600 rounded py-1 hover:bg-blue-50 transition"
-            >
-                View Full Results
-            </button>
+
         </div>
     );
 };
