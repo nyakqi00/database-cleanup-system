@@ -8,6 +8,7 @@ import os
 from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import select, text
+from sqlalchemy import or_, and_
 
 from backend_app import models
 from backend_app.database import engine, SessionLocal, init_db
@@ -396,11 +397,39 @@ def merge_into_master(db: Session = Depends(get_db)):
 def get_master_emails(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    search: str = Query(None),
+    brand: str = Query(None),       # "TR", "MFM", "NYSS"
+    segment: str = Query(None),     # "Champions", "Loyal", etc.
     db: Session = Depends(get_db)
 ):
     try:
-        results = db.query(MasterEmail).order_by(MasterEmail.last_updated.desc()).offset(offset).limit(limit).all()
-        total = db.query(MasterEmail).count()
+        query = db.query(MasterEmail)
+
+        # Search by email substring
+        if search:
+            query = query.filter(MasterEmail.email.ilike(f"%{search}%"))
+
+        # Filter by brand flag
+        if brand == "TR":
+            query = query.filter(MasterEmail.is_tr == True)
+        elif brand == "MFM":
+            query = query.filter(MasterEmail.is_mfm == True)
+        elif brand == "NYSS":
+            query = query.filter(MasterEmail.is_nyss == True)
+
+        # Match segment across brand segments
+        if segment:
+            query = query.filter(
+        or_(
+            MasterEmail.segment_tr.ilike(f"%{segment}%"),
+            MasterEmail.segment_mfm.ilike(f"%{segment}%"),
+            MasterEmail.segment_nyss.ilike(f"%{segment}%"),
+        )
+    )
+
+        total = query.count()
+        results = query.order_by(MasterEmail.last_updated.desc()).offset(offset).limit(limit).all()
+
         emails = [
             {
                 "email": row.email,

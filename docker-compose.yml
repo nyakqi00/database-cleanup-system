@@ -7,7 +7,7 @@ services:
     ports:
       - "8001:8000"
     volumes:
-      - ./email-cleanup-app/backend/temp_uploads:/app/temp_uploads
+      - ./email-cleanup-app/backend/temp_uploads:/app/temp_uploads:rw
     env_file:
       - ./email-cleanup-app/.env
     environment:

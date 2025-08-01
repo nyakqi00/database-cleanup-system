@@ -1,20 +1,32 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import { FaDatabase } from "react-icons/fa";
+import { HiOutlineDocumentText } from "react-icons/hi";
 
 function MasterEmailsPage() {
     const [emails, setEmails] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [total, setTotal] = useState(0);
+
     const [limit] = useState(100);
     const [offset, setOffset] = useState(0);
+
+    const [search, setSearch] = useState("");
+    const [brandFilter, setBrandFilter] = useState("");
+    const [segmentFilter, setSegmentFilter] = useState("");
 
     const fetchEmails = async () => {
         setLoading(true);
         try {
             const res = await axios.get("http://localhost:8001/master-emails", {
-                params: { limit, offset },
+                params: {
+                    limit,
+                    offset,
+                    search: search || undefined,
+                    brand: brandFilter || undefined,
+                    segment: segmentFilter || undefined,
+                },
             });
             setEmails(res.data.data);
             setTotal(res.data.total);
@@ -44,9 +56,73 @@ function MasterEmailsPage() {
     return (
         <div className="px-4 py-6">
             <h2 className="text-3xl font-bold text-teal-700 mb-4 flex items-center gap-2">
-                <FaDatabase /> Master Emails
+                <HiOutlineDocumentText className="text-teal-700" /> Master Emails
             </h2>
 
+            {/* Filters */}
+            <div className="flex flex-wrap items-end gap-4 mb-4">
+                <div>
+                    <label className="block text-sm text-gray-600">Search Email</label>
+                    <input
+                        type="text"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder="example@email.com"
+                        className="px-3 py-1.5 border rounded-md text-sm"
+                    />
+                </div>
+
+                <div>
+                    <label className="block text-sm text-gray-600">Brand</label>
+                    <select
+                        value={brandFilter}
+                        onChange={(e) => setBrandFilter(e.target.value)}
+                        className="px-3 py-1.5 border rounded-md text-sm"
+                    >
+                        <option value="">All</option>
+                        <option value="TR">TR</option>
+                        <option value="MFM">MFM</option>
+                        <option value="NYSS">NYSS</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label className="block text-sm text-gray-600">Segment</label>
+                    <select
+                        value={segmentFilter}
+                        onChange={(e) => setSegmentFilter(e.target.value)}
+                        className="px-3 py-1.5 border rounded-md text-sm"
+                    >
+                        <option value="">All</option>
+                        <option value="Champions">Champions</option>
+                        <option value="Loyal">Loyal</option>
+                        <option value="Promising">Promising</option>
+                        <option value="Need Attention">Need Attention</option>
+                        <option value="Can't Lose Them">Can't Lose Them</option>
+                        <option value="About To Sleep">About To Sleep</option>
+                        <option value="Hibernating">Hibernating</option>
+                    </select>
+                </div>
+
+                <button
+                    onClick={() => {
+                        setOffset(0);
+                        fetchEmails();
+                    }}
+                    className="bg-teal-600 text-white px-4 py-1.5 rounded text-sm hover:bg-teal-700"
+                >
+                    Apply
+                </button>
+
+                <button
+                    className="ml-auto text-sm border border-teal-600 text-teal-700 px-4 py-1.5 rounded hover:bg-teal-50"
+                    onClick={() => alert("Export to CSV coming soon")}
+                >
+                    Export to CSV
+                </button>
+            </div>
+
+            {/* Table */}
             {loading ? (
                 <p className="text-gray-500">Loading...</p>
             ) : error ? (
@@ -71,9 +147,9 @@ function MasterEmailsPage() {
                             {emails.map((email, idx) => (
                                 <tr key={idx} className="border-t hover:bg-teal-50">
                                     <td className="py-2 px-4 whitespace-nowrap">{email.email}</td>
-                                    <td className="py-2 px-4">{email.card_no}</td>
+                                    <td className="py-2 px-4 font-mono">{email.card_no?.toString()}</td>
                                     <td className="py-2 px-4">{email.name}</td>
-                                    <td className="py-2 px-4">{email.phone}</td>
+                                    <td className="py-2 px-4 font-mono">{email.phone?.toString()}</td>
                                     <td className="py-2 px-4">{email.segment_tr}</td>
                                     <td className="py-2 px-4">{email.segment_mfm}</td>
                                     <td className="py-2 px-4">{email.segment_nyss}</td>
@@ -90,6 +166,7 @@ function MasterEmailsPage() {
                 </div>
             )}
 
+            {/* Pagination */}
             <div className="flex justify-between items-center mt-6">
                 <button
                     onClick={prevPage}
