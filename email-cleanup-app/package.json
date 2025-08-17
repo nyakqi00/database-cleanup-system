@@ -1,0 +1,15 @@
+{
+  "name": "email-cleanup-app",
+  "version": "1.0.0",
+  "description": "This project is a backend-driven data cleaning tool built with FastAPI, Docker, and Pandas. It allows users to upload large CSV datasets (~70,000 rows), automatically clean them by removing invalid emails based on brand-specific rules, and preview or export the cleaned data.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "papaparse": "^5.5.3"
+  }
+}

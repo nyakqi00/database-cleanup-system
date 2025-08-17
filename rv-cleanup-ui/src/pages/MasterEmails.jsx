@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
-import { FaDatabase } from "react-icons/fa";
 import { HiOutlineDocumentText } from "react-icons/hi";
+import Papa from "papaparse";
 
 function MasterEmailsPage() {
     const [emails, setEmails] = useState([]);
@@ -26,6 +26,7 @@ function MasterEmailsPage() {
                     search: search || undefined,
                     brand: brandFilter || undefined,
                     segment: segmentFilter || undefined,
+                    full_export: true,
                 },
             });
             setEmails(res.data.data);
@@ -51,6 +52,36 @@ function MasterEmailsPage() {
         if (offset > 0) {
             setOffset(offset - limit);
         }
+    };
+
+    const exportToCSV = () => {
+        if (!emails || emails.length === 0) return;
+
+        const formattedData = emails.map(row => ({
+            Email: row.email,
+            "Card No": row.card_no,
+            Name: row.name,
+            Phone: row.phone,
+            "TR Segment": row.segment_tr,
+            "MFM Segment": row.segment_mfm,
+            "NYSS Segment": row.segment_nyss,
+            Brands: [
+                row.is_tr ? "TR" : "",
+                row.is_mfm ? "MFM" : "",
+                row.is_nyss ? "NYSS" : ""
+            ].filter(Boolean).join(", "),
+            "Last Updated": row.last_updated
+        }));
+
+        const csv = Papa.unparse(formattedData);
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.setAttribute("download", "master_emails_export.csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     };
 
     return (
@@ -116,7 +147,7 @@ function MasterEmailsPage() {
 
                 <button
                     className="ml-auto text-sm border border-teal-600 text-teal-700 px-4 py-1.5 rounded hover:bg-teal-50"
-                    onClick={() => alert("Export to CSV coming soon")}
+                    onClick={exportToCSV}
                 >
                     Export to CSV
                 </button>

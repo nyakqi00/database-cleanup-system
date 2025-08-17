@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from typing import List
 import pandas as pd
 import os
+import io
 from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import select, text
@@ -126,19 +127,63 @@ async def upload_csv(file: UploadFile = File(...), brand: str = Form(...), db: S
         return JSONResponse(status_code=400, content={"error": f"Upload failed: {str(e)}"})
 
 
-@app.post("/invalid-emails/add")
-def add_invalid_emails(
-    data: EmailUploadRequest,
+@app.post("/invalid-emails/upload")
+async def upload_invalid_emails(
+    file: UploadFile = File(...),
+    brand: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    added = 0
-    for email in data.emails:
-        email = email.strip().lower()
-        if not db.query(InvalidEmail).filter_by(email=email).first():
-            db.add(InvalidEmail(email=email, brand=data.brand.strip()))
-            added += 1
-    db.commit()
-    return {"status": "success", "brand": data.brand.strip(), "added": added}
+    try:
+        contents = await file.read()
+        df = pd.read_csv(io.StringIO(contents.decode("utf-8-sig")))
+
+        if 'email' not in df.columns:
+            return JSONResponse(status_code=400, content={
+                "error": "Missing 'email' column.",
+                "detected_columns": df.columns.tolist()
+            })
+
+        df['email'] = df['email'].astype(str).str.strip().str.lower()
+        added = 0
+
+        for email in df['email'].unique():
+            if not db.query(InvalidEmail).filter_by(email=email).first():
+                db.add(InvalidEmail(email=email, brand=brand))
+                added += 1
+
+        db.commit()
+        return {"status": "success", "brand": brand, "added": added}
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    
+@app.get("/invalid-emails")
+def get_invalid_emails(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    search: str = Query(None),
+    brand: str = Query(None),
+    db: Session = Depends(get_db)
+):
+    try:
+        query = db.query(InvalidEmail)
+
+        if search:
+            query = query.filter(InvalidEmail.email.ilike(f"%{search}%"))
+        if brand:
+            query = query.filter(InvalidEmail.brand == brand)
+
+        total = query.count()
+        emails = query.offset(offset).limit(limit).all()
+
+        return {
+            "status": "success",
+            "total": total,
+            "data": [{"email": e.email, "brand": e.brand} for e in emails]
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 
 @app.post("/validate-emails")
@@ -393,42 +438,46 @@ def merge_into_master(db: Session = Depends(get_db)):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+
+
 @app.get("/master-emails")
 def get_master_emails(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     search: str = Query(None),
-    brand: str = Query(None),       # "TR", "MFM", "NYSS"
-    segment: str = Query(None),     # "Champions", "Loyal", etc.
+    brand: str = Query(None),
+    segment: str = Query(None),
+    full_export: bool = Query(False),
     db: Session = Depends(get_db)
 ):
     try:
         query = db.query(MasterEmail)
 
-        # Search by email substring
+        # Apply filters
         if search:
             query = query.filter(MasterEmail.email.ilike(f"%{search}%"))
-
-        # Filter by brand flag
         if brand == "TR":
             query = query.filter(MasterEmail.is_tr == True)
         elif brand == "MFM":
             query = query.filter(MasterEmail.is_mfm == True)
         elif brand == "NYSS":
             query = query.filter(MasterEmail.is_nyss == True)
-
-        # Match segment across brand segments
         if segment:
             query = query.filter(
-        or_(
-            MasterEmail.segment_tr.ilike(f"%{segment}%"),
-            MasterEmail.segment_mfm.ilike(f"%{segment}%"),
-            MasterEmail.segment_nyss.ilike(f"%{segment}%"),
-        )
-    )
+                or_(
+                    MasterEmail.segment_tr.ilike(f"%{segment}%"),
+                    MasterEmail.segment_mfm.ilike(f"%{segment}%"),
+                    MasterEmail.segment_nyss.ilike(f"%{segment}%"),
+                )
+            )
 
         total = query.count()
-        results = query.order_by(MasterEmail.last_updated.desc()).offset(offset).limit(limit).all()
+
+        # Only paginate if not full_export
+        if not full_export:
+            query = query.offset(offset).limit(limit)
+
+        results = query.order_by(MasterEmail.last_updated.desc()).all()
 
         emails = [
             {
@@ -446,7 +495,7 @@ def get_master_emails(
             }
             for row in results
         ]
+
         return {"status": "success", "total": total, "data": emails}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
-
