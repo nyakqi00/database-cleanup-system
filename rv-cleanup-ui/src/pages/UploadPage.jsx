@@ -1,6 +1,8 @@
 import api from "../services/api";
 import { useState, useRef } from "react";
 import LoadingModal from "../components/LoadingModal";
+import Particles from "../components/Particles";
+
 
 function UploadPage() {
   const [brand, setBrand] = useState("");
@@ -62,7 +64,21 @@ function UploadPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-100 to-gray-200 flex flex-col items-center justify-center p-6 relative">
+    <div className="min-h-screen relative flex flex-col items-center justify-center p-6">
+      {/* 🔴 Particle background */}
+      <div className="absolute inset-0 -z-10">
+        <Particles
+          particleColors={["#3b82f6", "#60a5fa", "#1e40af"]}
+          particleCount={150}
+          particleSpread={10}
+          speed={0.15}
+          particleBaseSize={80}
+          moveParticlesOnHover={true}
+          alphaParticles={true}
+          disableRotation={false}
+        />
+      </div>
+
       {uploading && (
         <div className="absolute z-10 bg-black bg-opacity-30 inset-0 flex items-center justify-center">
           <LoadingModal timeLeft={timeLeft} progress={progress} />

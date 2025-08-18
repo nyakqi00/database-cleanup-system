@@ -1,14 +1,28 @@
 import { NavLink } from "react-router-dom";
 import { FaUpload, FaEnvelopeOpenText, FaTimesCircle } from "react-icons/fa";
 import TopNavbar from "../components/TopNavbar";
+import Particles from "../components/Particles";
 import React from "react";
-
 
 function DashboardLayout({ children }) {
     return (
-        <div className="flex min-h-screen bg-gray-100 font-sans text-gray-800">
+        <div className="flex min-h-screen bg-gray-100 font-sans text-gray-800 relative overflow-hidden">
+            {/* 🔴 Global Particle Background */}
+            <div className="absolute inset-0 -z-10">
+                <Particles
+                    particleColors={["#f87171", "#ef4444", "#dc2626"]}
+                    particleCount={200}
+                    particleSpread={10}
+                    speed={0.1}
+                    particleBaseSize={80}
+                    moveParticlesOnHover={true}
+                    alphaParticles={true}
+                    disableRotation={false}
+                />
+            </div>
+
             {/* Sidebar */}
-            <aside className="w-64 bg-white border-r shadow-lg flex flex-col">
+            <aside className="w-64 bg-white border-r shadow-lg flex flex-col relative z-10">
                 <div className="h-16 px-6 flex items-center border-b font-bold text-xl text-teal-600">
                     <img src="/logo.jpeg" alt="RV Cleanup Logo" className="w-14 mx-auto" />
                 </div>
@@ -56,12 +70,11 @@ function DashboardLayout({ children }) {
             </aside>
 
             {/* Main Content Area */}
-            <div className="flex-1 flex flex-col">
-                {/* 👇 Replace this line */}
+            <div className="flex-1 flex flex-col relative z-10">
                 <TopNavbar />
 
-                {/* Page Content */}
-                <main className="flex-1 p-6 bg-gray-50">{children}</main>
+                {/* Transparent main so particles show behind */}
+                <main className="flex-1 p-6 bg-transparent">{children}</main>
             </div>
         </div>
     );
